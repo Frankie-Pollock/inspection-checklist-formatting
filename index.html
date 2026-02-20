@@ -17,38 +17,38 @@
 </head>
 <body>
 
-  <h2>VOID Inspection Checklist Processor</h2>
+<h2>VOID Inspection Checklist Processor</h2>
 
-  <div class="panel">
-    <label>Address:</label><br>
-    <input id="address" type="text" placeholder="e.g. 12 EXAMPLE STREET">
+<div class="panel">
+  <label>Address:</label><br>
+  <input id="address" type="text" placeholder="e.g. 12 EXAMPLE STREET">
 
-    <label style="margin-top:10px;">Pack Type:</label><br>
-    <select id="packType">
-      <option value="AC_GOLD">AC GOLD PACK</option>
-      <option value="BMD_PACK">BMD PACK</option>
-    </select>
+  <label style="margin-top:10px;">Pack Type:</label><br>
+  <select id="packType">
+    <option value="AC_GOLD">AC GOLD PACK</option>
+    <option value="BMD_PACK">BMD PACK</option>
+  </select>
 
-    <div id="dropzone" class="dropzone">
-      Drag INSPECTION CHECKLIST PDF here
-    </div>
+  <div id="dropzone" class="dropzone">
+    Drag INSPECTION CHECKLIST PDF here
   </div>
+</div>
 
-  <!-- PDF.js as ES module (served as .js for correct MIME type on GitHub Pages) -->
-  <script type="module">
-    import * as pdfjsLib from './pdf.js?v=2';
-    window.pdfjsLib = pdfjsLib;
-    pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.js?v=2';
-  </script>
+<!-- PDF.js (ES Module) -->
+<script type="module">
+  import * as pdfjsLib from "./pdf.js?v=2";
+  window.pdfjsLib = pdfjsLib;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.js?v=2";
+</script>
 
-  <!-- JSZip (must load before script.js) -->
-  <script src=./jszip.min.js?v=2</script>
+<!-- JSZip -->
+<script src="./jszip.min.js?v=2"></script>
 
-  <!-- pdf-lib (creates proper single-page PDFs) -->
-  <script src=./pdf-lib.min.js?v=2</script>
+<!-- pdf-lib (for creating valid PDF pages) -->
+<script src="./pdf-lib.min.js?v=2"></script>
 
-  <!-- App Logic -->
-  <script src=./script.js?v=2</script>
+<!-- App Logic -->
+<script src="./script.js?v=2"></script>
 
 </body>
 </html>
