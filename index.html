@@ -34,25 +34,21 @@
   </div>
 </div>
 
-<!-- PDF.js (ES Module) -->
+<!-- JSZip -->
+jszip.min.js?v=3"></script>
 
-<!-- JSZip (load before app logic) -->
-<script src="./jszip.min.js?v=3"></script>
+<!-- pdf-lib -->
+pdf-lib.min.js?v=3"></script>
 
-<!-- pdf-lib (creates proper single-page PDFs) -->
-<script src="./pdf-lib.min.js?v=3"></script>
-
-<!-- PDF.js + App boot (module) -->
+<!-- PDF.js + App boot -->
 <script type="module">
-  // 1) Import PDF.js and set worker
   import * as pdfjsLib from "./pdf.js?v=3";
-  window.pdfjsLib = pdfjsLib; // expose for script.js
+  window.pdfjsLib = pdfjsLib;
   pdfjsLib.GlobalWorkerOptions.workerSrc = "./pdf.worker.js?v=3";
 
-  // 2) Now load your app logic AFTER pdfjsLib is ready
-  await import("./script.js?v=3");
-</
-
+  // Load app logic AFTER pdfjsLib is ready
+  import("./script.js?v=3");
+</script>
 
 </body>
 </html>
