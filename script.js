@@ -1,6 +1,13 @@
-// =======================================
-// Helpers
-// =======================================
+// =====================================================
+// VOID Inspection Checklist Processor — Part 2
+// Generates REAL PDFs per page using pdf-lib
+// Dependencies loaded in index.html BEFORE this file:
+//   • window.pdfjsLib (from pdf.mjs + pdf.worker.mjs)
+//   • window.JSZip     (from jszip.min.js)
+//   • window.PDFLib    (from pdf-lib.min.js)
+// =====================================================
+
+// ---------- Helpers ----------
 const $ = sel => document.querySelector(sel);
 
 const toUpper = s => (s || "").toUpperCase();
@@ -19,11 +26,23 @@ function uniquify(name, set) {
   return unique;
 }
 
+// Quick dependency guard (helps debug if a lib didn't load)
+(function sanityChecks() {
+  const missing = [];
+  if (!window.pdfjsLib) missing.push("pdfjsLib (pdf.mjs)");
+  if (!window.JSZip)    missing.push("JSZip (jszip.min.js)");
+  if (!window.PDFLib)   missing.push("PDFLib (pdf-lib.min.js)");
+  if (missing.length) {
+    const msg = `Missing dependencies: ${missing.join(", ")}.\n` +
+                `Ensure these scripts are included BEFORE script.js.`;
+    console.error(msg);
+    alert(msg);
+  }
+})();
+
+// ---------- UI (drag & drop) ----------
 const dropzone = $("#dropzone");
 
-// =======================================
-// Drag + Drop
-// =======================================
 dropzone.addEventListener("dragover", e => {
   e.preventDefault();
   dropzone.style.opacity = 0.85;
@@ -31,7 +50,6 @@ dropzone.addEventListener("dragover", e => {
 dropzone.addEventListener("dragleave", () => {
   dropzone.style.opacity = 1;
 });
-
 dropzone.addEventListener("drop", async e => {
   e.preventDefault();
   dropzone.style.opacity = 1;
@@ -40,7 +58,7 @@ dropzone.addEventListener("drop", async e => {
   const packType = $("#packType").value;
 
   if (!address) {
-    alert("Enter the address.");
+    alert("Enter the address first.");
     return;
   }
 
@@ -50,107 +68,99 @@ dropzone.addEventListener("drop", async e => {
     return;
   }
 
-  processChecklist(file, address, packType);
+  await processChecklist(file, address, packType);
 });
 
-// =======================================
-// Main processor
-// =======================================
+// ---------- Processing pipeline ----------
 async function processChecklist(file, address, packType) {
   try {
-    const arrayBuf = await file.arrayBuffer();
-    const pdf = await window.pdfjsLib.getDocument({ data: arrayBuf }).promise;
+    // Read original PDF bytes once (for both PDF.js and pdf-lib)
+    const srcBytes = new Uint8Array(await file.arrayBuffer());
 
-    const out = new JSZip();
-    const used = new Set();
+    // PDF.js: for page count + text extraction
+    const jsDoc = await window.pdfjsLib.getDocument({ data: srcBytes }).promise;
 
-    // PAGE 1 — always saved
-    const page1Blob = await extractPage(pdf, 1);
+    // pdf-lib: for true PDF page extraction (vector-safe)
+    const srcDoc = await window.PDFLib.PDFDocument.load(srcBytes);
+
+    const outZip = new JSZip();
+    const usedNames = new Set();
+
+    // --- PAGE 1: Always export as checklist (even if blank) ---
+    const page1Blob = await exportSinglePageBlob(srcDoc, 0); // zero-based index
     let name1 = `${address} - INSPECTION CHECKLIST.pdf`;
-    name1 = uniquify(name1, used);
-    out.file(name1, page1Blob);
+    name1 = uniquify(name1, usedNames);
+    outZip.file(name1, page1Blob);
 
-    // Counters
-    let acMtwCount = 0;
-    let bmdCount = 0;
+    // Counters for numbering
+    let acGoldMtw = 0; // AC GOLD MTW (1..n)
+    let bmdCount  = 0; // BMD PACK: BMD WORKS (1..n)
+    // Recharge is unnumbered unless duplicates → handled by uniquify
 
-    for (let i = 2; i <= pdf.numPages; i++) {
-      const text = await extractText(pdf, i);
-      if (!text.trim()) continue; // skip blank
+    // --- PAGES 2..N: process only text pages ---
+    for (let pageNum = 2; pageNum <= jsDoc.numPages; pageNum++) {
+      const textUpper = await extractTextUpper(jsDoc, pageNum);
+      if (!textUpper.trim()) continue; // skip blank (no text items)
 
-      const pageBlob = await extractPage(pdf, i);
-      let newName = "";
+      // Build proper single-page PDF via pdf-lib (copy page from source)
+      const pageBlob = await exportSinglePageBlob(srcDoc, pageNum - 1); // zero-based
 
-      // ================================
-      // AC GOLD PACK LOGIC
-      // ================================
+      let outName = "";
+
       if (packType === "AC_GOLD") {
-
-        if (text.includes("BMD WORKS REQUIRED")) {
-          // ALWAYS unnumbered unless duplicates
-          newName = `${address} - VOID BMD WORKS.pdf`;
+        // If the page contains BMD WORKS REQUIRED → BMD Works (unnumbered)
+        if (textUpper.includes("BMD WORKS REQUIRED")) {
+          outName = `${address} - VOID BMD WORKS.pdf`; // unnumbered unless duplicate
         } else {
-          acMtwCount++;
-          newName = `${address} - AC GOLD MTW (${acMtwCount}).pdf`;
+          // Otherwise it's AC GOLD MTW and numbered
+          acGoldMtw++;
+          outName = `${address} - AC GOLD MTW (${acGoldMtw}).pdf`;
         }
-      }
-
-      // ================================
-      // BMD PACK LOGIC
-      // ================================
-      else if (packType === "BMD_PACK") {
-
-        if (text.includes("RECHARGE WORK")) {
-          newName = `${address} - VOID RECHARGEABLE WORKS.pdf`;
+      } else if (packType === "BMD_PACK") {
+        // If page contains RECHARGE WORK → Recharge (unnumbered unless duplicate)
+        if (textUpper.includes("RECHARGE WORK")) {
+          outName = `${address} - VOID RECHARGEABLE WORKS.pdf`;
         } else {
-          // BMD pages ARE numbered
+          // Otherwise BMD Works and numbered
           bmdCount++;
-          newName = `${address} - VOID BMD WORKS (${bmdCount}).pdf`;
+          outName = `${address} - VOID BMD WORKS (${bmdCount}).pdf`;
         }
+      } else {
+        // Fallback (shouldn't hit)
+        outName = `${address} - PAGE ${pageNum}.pdf`;
       }
 
-      newName = uniquify(newName, used);
-      out.file(newName, pageBlob);
+      outName = uniquify(outName, usedNames);
+      outZip.file(outName, pageBlob);
     }
 
-    const blob = await out.generateAsync({ type: "blob" });
+    // --- Package as ZIP and download ---
+    const outBlob = await outZip.generateAsync({ type: "blob" });
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+    a.href = URL.createObjectURL(outBlob);
     a.download = `${address} - PROCESSED_CHECKLIST.zip`;
     a.click();
 
   } catch (err) {
     console.error(err);
-    alert("Processing failed. Check the PDF file.");
+    alert("Processing failed. Check the PDF and that libraries are loaded.");
   }
 }
 
-// =======================================
-// Extract text from a page
-// =======================================
-async function extractText(pdf, pageNum) {
-  const page = await pdf.getPage(pageNum);
+// ---------- Text extraction (blank detection) ----------
+async function extractTextUpper(jsDoc, pageNum) {
+  const page = await jsDoc.getPage(pageNum);
   const content = await page.getTextContent();
   return content.items.map(i => i.str).join(" ").toUpperCase();
 }
 
-// =======================================
-// Extract a page as a single-page PDF
-// =======================================
-async function extractPage(pdf, pageNum) {
-  const page = await pdf.getPage(pageNum);
-  const opList = await page.getOperatorList();
+// ---------- Real single-page PDF export via pdf-lib ----------
+async function exportSinglePageBlob(srcDoc, zeroBasedIndex) {
+  // Create a brand new PDF and copy one page from the source
+  const newDoc = await window.PDFLib.PDFDocument.create();
+  const [copied] = await newDoc.copyPages(srcDoc, [zeroBasedIndex]);
+  newDoc.addPage(copied);
 
-  // Minimal single page PDF generator
-  // Using PDF.js internal API for canvas export fallback
-  const viewport = page.getViewport({ scale: 1 });
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-
-  canvas.width = Math.floor(viewport.width);
-  canvas.height = Math.floor(viewport.height);
-
-  await page.render({ canvasContext: ctx, viewport }).promise;
-
-  return await new Promise(resolve => canvas.toBlob(resolve, "application/pdf"));
+  const bytes = await newDoc.save({ useObjectStreams: false });
+  return new Blob([bytes], { type: "application/pdf" });
 }
