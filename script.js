@@ -1,13 +1,8 @@
 // =====================================================
 // VOID Inspection Checklist Processor — Part 2
-// Generates REAL PDFs per page using pdf-lib
-// Dependencies loaded in index.html BEFORE this file:
-//   • window.pdfjsLib (from pdf.mjs + pdf.worker.mjs)
-//   • window.JSZip     (from jszip.min.js)
-//   • window.PDFLib    (from pdf-lib.min.js)
+// CONVERTS EACH PAGE USING REAL PDF PAGE COPYING
 // =====================================================
 
-// ---------- Helpers ----------
 const $ = sel => document.querySelector(sel);
 
 const toUpper = s => (s || "").toUpperCase();
@@ -21,28 +16,14 @@ function uniquify(name, set) {
   const ext  = extIdx >= 0 ? name.slice(extIdx) : "";
   let i = 2;
   while (set.has(`${base} (${i})${ext}`)) i++;
-  const unique = `${base} (${i})${ext}`;
-  set.add(unique);
-  return unique;
+  const result = `${base} (${i})${ext}`;
+  set.add(result);
+  return result;
 }
 
-// Quick dependency guard (helps debug if a lib didn't load)
-(function sanityChecks() {
-  const missing = [];
-  if (!window.pdfjsLib) missing.push("pdfjsLib (pdf.mjs)");
-  if (!window.JSZip)    missing.push("JSZip (jszip.min.js)");
-  if (!window.PDFLib)   missing.push("PDFLib (pdf-lib.min.js)");
-  if (missing.length) {
-    const msg = `Missing dependencies: ${missing.join(", ")}.\n` +
-                `Ensure these scripts are included BEFORE script.js.`;
-    console.error(msg);
-    alert(msg);
-  }
-})();
-
-// ---------- UI (drag & drop) ----------
 const dropzone = $("#dropzone");
 
+// Drag events
 dropzone.addEventListener("dragover", e => {
   e.preventDefault();
   dropzone.style.opacity = 0.85;
@@ -58,109 +39,95 @@ dropzone.addEventListener("drop", async e => {
   const packType = $("#packType").value;
 
   if (!address) {
-    alert("Enter the address first.");
+    alert("Enter the ADDRESS first.");
     return;
   }
 
   const file = e.dataTransfer.files[0];
   if (!file || !file.name.toLowerCase().endsWith(".pdf")) {
-    alert("Please drop a single Inspection Checklist PDF.");
+    alert("Please drop a valid PDF.");
     return;
   }
 
-  await processChecklist(file, address, packType);
+  processChecklist(file, address, packType);
 });
 
-// ---------- Processing pipeline ----------
 async function processChecklist(file, address, packType) {
   try {
-    // Read original PDF bytes once (for both PDF.js and pdf-lib)
-    const srcBytes = new Uint8Array(await file.arrayBuffer());
+    const arrayBuf = await file.arrayBuffer();
+    const uint8 = new Uint8Array(arrayBuf);
 
-    // PDF.js: for page count + text extraction
-    const jsDoc = await window.pdfjsLib.getDocument({ data: srcBytes }).promise;
+    // PDF.js document (for text extraction)
+    const jsDoc = await pdfjsLib.getDocument({ data: uint8 }).promise;
 
-    // pdf-lib: for true PDF page extraction (vector-safe)
-    const srcDoc = await window.PDFLib.PDFDocument.load(srcBytes);
+    // pdf-lib document (for true PDF page copying)
+    const srcDoc = await PDFLib.PDFDocument.load(uint8);
 
-    const outZip = new JSZip();
-    const usedNames = new Set();
+    const out = new JSZip();
+    const used = new Set();
 
-    // --- PAGE 1: Always export as checklist (even if blank) ---
-    const page1Blob = await exportSinglePageBlob(srcDoc, 0); // zero-based index
+    // ---- PAGE 1 ALWAYS SAVED ----
+    const page1Blob = await savePageAsPdf(srcDoc, 0);
     let name1 = `${address} - INSPECTION CHECKLIST.pdf`;
-    name1 = uniquify(name1, usedNames);
-    outZip.file(name1, page1Blob);
+    name1 = uniquify(name1, used);
+    out.file(name1, page1Blob);
 
-    // Counters for numbering
-    let acGoldMtw = 0; // AC GOLD MTW (1..n)
-    let bmdCount  = 0; // BMD PACK: BMD WORKS (1..n)
-    // Recharge is unnumbered unless duplicates → handled by uniquify
+    let acGoldMtwCount = 0;
+    let bmdCount = 0;
 
-    // --- PAGES 2..N: process only text pages ---
-    for (let pageNum = 2; pageNum <= jsDoc.numPages; pageNum++) {
-      const textUpper = await extractTextUpper(jsDoc, pageNum);
-      if (!textUpper.trim()) continue; // skip blank (no text items)
+    for (let i = 2; i <= jsDoc.numPages; i++) {
+      const text = await extractPageText(jsDoc, i);
+      if (!text.trim()) continue; // skip blank pages
 
-      // Build proper single-page PDF via pdf-lib (copy page from source)
-      const pageBlob = await exportSinglePageBlob(srcDoc, pageNum - 1); // zero-based
-
-      let outName = "";
+      let filename = "";
+      const pageBlob = await savePageAsPdf(srcDoc, i - 1);
 
       if (packType === "AC_GOLD") {
-        // If the page contains BMD WORKS REQUIRED → BMD Works (unnumbered)
-        if (textUpper.includes("BMD WORKS REQUIRED")) {
-          outName = `${address} - VOID BMD WORKS.pdf`; // unnumbered unless duplicate
+        if (text.includes("BMD WORKS REQUIRED")) {
+          filename = `${address} - VOID BMD WORKS.pdf`;
         } else {
-          // Otherwise it's AC GOLD MTW and numbered
-          acGoldMtw++;
-          outName = `${address} - AC GOLD MTW (${acGoldMtw}).pdf`;
+          acGoldMtwCount++;
+          filename = `${address} - AC GOLD MTW (${acGoldMtwCount}).pdf`;
         }
-      } else if (packType === "BMD_PACK") {
-        // If page contains RECHARGE WORK → Recharge (unnumbered unless duplicate)
-        if (textUpper.includes("RECHARGE WORK")) {
-          outName = `${address} - VOID RECHARGEABLE WORKS.pdf`;
-        } else {
-          // Otherwise BMD Works and numbered
-          bmdCount++;
-          outName = `${address} - VOID BMD WORKS (${bmdCount}).pdf`;
-        }
-      } else {
-        // Fallback (shouldn't hit)
-        outName = `${address} - PAGE ${pageNum}.pdf`;
       }
 
-      outName = uniquify(outName, usedNames);
-      outZip.file(outName, pageBlob);
+      else if (packType === "BMD_PACK") {
+        if (text.includes("RECHARGE WORK")) {
+          filename = `${address} - VOID RECHARGEABLE WORKS.pdf`;
+        } else {
+          bmdCount++;
+          filename = `${address} - VOID BMD WORKS (${bmdCount}).pdf`;
+        }
+      }
+
+      filename = uniquify(filename, used);
+      out.file(filename, pageBlob);
     }
 
-    // --- Package as ZIP and download ---
-    const outBlob = await outZip.generateAsync({ type: "blob" });
+    const zipBlob = await out.generateAsync({ type: "blob" });
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(outBlob);
+    a.href = URL.createObjectURL(zipBlob);
     a.download = `${address} - PROCESSED_CHECKLIST.zip`;
     a.click();
 
   } catch (err) {
     console.error(err);
-    alert("Processing failed. Check the PDF and that libraries are loaded.");
+    alert("Failed to process PDF. The file may be corrupted or protected.");
   }
 }
 
-// ---------- Text extraction (blank detection) ----------
-async function extractTextUpper(jsDoc, pageNum) {
+// -------- TEXT EXTRACTION (PDF.js) --------
+async function extractPageText(jsDoc, pageNum) {
   const page = await jsDoc.getPage(pageNum);
   const content = await page.getTextContent();
   return content.items.map(i => i.str).join(" ").toUpperCase();
 }
 
-// ---------- Real single-page PDF export via pdf-lib ----------
-async function exportSinglePageBlob(srcDoc, zeroBasedIndex) {
-  // Create a brand new PDF and copy one page from the source
-  const newDoc = await window.PDFLib.PDFDocument.create();
-  const [copied] = await newDoc.copyPages(srcDoc, [zeroBasedIndex]);
-  newDoc.addPage(copied);
-
+// -------- PAGE COPYING (REAL PDF via pdf-lib) --------
+async function savePageAsPdf(srcDoc, pageIndex) {
+  const newDoc = await PDFLib.PDFDocument.create();
+  const [copiedPage] = await newDoc.copyPages(srcDoc, [pageIndex]);
+  newDoc.addPage(copiedPage);
   const bytes = await newDoc.save({ useObjectStreams: false });
   return new Blob([bytes], { type: "application/pdf" });
 }
